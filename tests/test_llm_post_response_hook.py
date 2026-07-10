@@ -95,7 +95,7 @@ async def test_post_response_hook_gemini():
 
     response = await chat_async(
         provider="gemini",
-        model="gemini-2.5-flash-lite-preview-06-17",
+        model="gemini-2.5-flash",
         messages=[
             {"role": "user", "content": "Say 'gemini hook test' and nothing else."}
         ],
@@ -139,7 +139,7 @@ async def test_normal():
 
     response = await chat_async(
         provider="gemini",
-        model="gemini-2.5-flash-lite-preview-06-17",
+        model="gemini-2.5-flash",
         messages=[
             {"role": "user", "content": "Say 'gemini hook test' and nothing else."}
         ],

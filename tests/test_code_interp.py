@@ -72,7 +72,7 @@ Charlie Wilson,32,48000,Marketing"""
 
         response = await code_interpreter_tool(
             question=self.complex_question,
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             provider=LLMProvider.GEMINI,
             csv_string=self.sample_csv,
         )

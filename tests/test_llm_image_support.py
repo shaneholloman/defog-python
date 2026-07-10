@@ -145,7 +145,7 @@ class TestLLMImageSupport(unittest.IsolatedAsyncioTestCase):
 
         response = await chat_async(
             provider=LLMProvider.GEMINI,
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             messages=messages,
             temperature=0.0,
             max_retries=1,

@@ -229,18 +229,18 @@ class TestProviderMessageCreation:
 
         # Test single image
         msg = provider.create_image_message(image_data, "Test image")
-        # Gemini returns a Content object, not a dict
-        assert msg.role == "user"
-        assert len(msg.parts) == 2
-        assert msg.parts[0].text == "Test image"
-        assert hasattr(msg.parts[1], "inline_data")  # Image part
-        assert msg.parts[1].inline_data.mime_type == "image/png"
+        # Gemini messages use the same dict shape as the other providers.
+        assert msg["role"] == "user"
+        assert len(msg["content"]) == 2
+        assert msg["content"][0]["text"] == "Test image"
+        image_part = msg["content"][1]
+        assert image_part["type"] == "image_bytes"
+        assert image_part["mime_type"] == "image/png"
 
-        # Verify the bytes data is correct
+        # Verify the base64 image data round-trips.
         import base64
 
-        expected_bytes = base64.b64decode(image_data)
-        assert msg.parts[1].inline_data.data == expected_bytes
+        assert base64.b64decode(image_part["data"]) == base64.b64decode(image_data)
 
 
 class TestImageValidation:

@@ -179,9 +179,7 @@ async def web_search_tool(
                 # Claude 4.6+ models support adaptive thinking, which
                 # replaces the deprecated budget_tokens approach.
                 _is_adaptive = (
-                    "opus-4-6" in model
-                    or "opus-4-7" in model
-                    or "sonnet-4-6" in model
+                    "opus-4-6" in model or "opus-4-7" in model or "sonnet-4-6" in model
                 )
                 if _is_adaptive:
                     request_params["thinking"] = {"type": "adaptive"}
@@ -282,9 +280,11 @@ async def web_search_tool(
                 "tools": [{"type": "google_search"}],
             }
 
-            # Add structured output config if response_format provided
+            # Add structured output config if response_format provided. The
+            # Interactions API expects the JSON schema itself as
+            # ``response_format`` (a {"type": "text", ...} wrapper is accepted
+            # but the schema inside it is not enforced).
             if response_format:
-                request_params["response_mime_type"] = "application/json"
                 request_params["response_format"] = response_format.model_json_schema()
 
             # Add reasoning effort for gemini-3 models
@@ -318,7 +318,11 @@ async def web_search_tool(
                 usage_obj = response.usage
                 input_tokens = getattr(usage_obj, "total_input_tokens", 0) or 0
                 output_tokens = getattr(usage_obj, "total_output_tokens", 0) or 0
-                thinking_tokens = getattr(usage_obj, "total_reasoning_tokens", 0) or 0
+                thinking_tokens = (
+                    getattr(usage_obj, "total_thought_tokens", None)
+                    or getattr(usage_obj, "total_reasoning_tokens", 0)
+                    or 0
+                )
                 cached_tokens = getattr(usage_obj, "total_cached_tokens", 0) or 0
                 tool_use_tokens = getattr(usage_obj, "total_tool_use_tokens", 0) or 0
 
@@ -331,8 +335,8 @@ async def web_search_tool(
             # Extract websites from grounding metadata or google_search_result outputs
             websites_cited = []
             seen_urls = set()
-            if hasattr(response, "outputs") and response.outputs:
-                for output in response.outputs:
+            if hasattr(response, "steps") and response.steps:
+                for output in response.steps:
                     output_type = getattr(output, "type", None)
                     if output_type == "google_search_result":
                         result_items = getattr(output, "result", None) or []
@@ -368,12 +372,15 @@ async def web_search_tool(
                                         )
                                         seen_urls.add(url)
 
-            # Extract text from outputs
-            output_text = ""
-            if hasattr(response, "outputs") and response.outputs:
-                for output in response.outputs:
-                    if getattr(output, "type", None) == "text":
-                        output_text += output.text or ""
+            # Extract the model's answer text (``output_text`` convenience
+            # field, falling back to the model_output steps).
+            output_text = getattr(response, "output_text", None) or ""
+            if not output_text and getattr(response, "steps", None):
+                for step in response.steps:
+                    if getattr(step, "type", None) == "model_output":
+                        for block in getattr(step, "content", None) or []:
+                            if getattr(block, "type", None) == "text":
+                                output_text += block.text or ""
 
             subtask_logger.log_result_summary(
                 "Web Search",

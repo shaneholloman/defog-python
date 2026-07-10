@@ -850,7 +850,7 @@ class TestGeminiSystemInstruction:
 
         assert system_instruction == "You are a helpful assistant."
         assert len(input_contents) == 1
-        assert input_contents[0]["role"] == "user"
+        assert input_contents[0]["type"] == "user_input"
 
     def test_multiple_system_messages_concatenated(self):
         """Multiple system messages should be joined with double newlines."""
@@ -905,7 +905,7 @@ class TestGeminiSystemInstruction:
         assert request_params["system_instruction"] == "Be concise."
         # Ensure no user turn was created for the system message
         assert len(request_params["input"]) == 1
-        assert request_params["input"][0]["role"] == "user"
+        assert request_params["input"][0]["type"] == "user_input"
 
     def test_no_system_instruction_when_no_system_messages(self):
         """build_params should omit system_instruction when there are no system messages."""
@@ -937,7 +937,7 @@ class TestGeminiSystemInstruction:
 
         # Should have exactly 1 turn (the user message), not 2 consecutive user turns
         assert len(input_contents) == 1
-        assert input_contents[0]["role"] == "user"
+        assert input_contents[0]["type"] == "user_input"
 
     def test_system_message_with_list_content(self):
         """System messages with list content should be handled correctly."""
