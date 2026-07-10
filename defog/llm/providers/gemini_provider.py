@@ -109,14 +109,15 @@ class GeminiProvider(BaseLLMProvider):
             Turn dicts for the ``input`` parameter.
         """
         system_parts: List[str] = []
-        input_contents = []
+        steps: List[Dict[str, Any]] = []
 
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content")
             tool_calls = msg.get("tool_calls")
 
-            # Extract system messages for the system_instruction parameter
+            # System messages are sent via the ``system_instruction`` parameter,
+            # not as an input step.
             if role == "system":
                 if isinstance(content, str):
                     system_parts.append(content)
@@ -130,58 +131,53 @@ class GeminiProvider(BaseLLMProvider):
                         system_parts.append("\n\n".join(texts))
                 continue
 
-            parts = []
-
+            # Assistant tool calls each become their own ``function_call`` step.
             if tool_calls:
                 for tc in tool_calls:
                     function = tc.get("function", {})
-                    part = {
-                        "function_call": {
-                            "name": function.get("name"),
-                            "args": function.get("arguments"),
-                        }
+                    args = function.get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except (json.JSONDecodeError, TypeError):
+                            args = {}
+                    call_step: Dict[str, Any] = {
+                        "type": "function_call",
+                        "name": function.get("name"),
+                        "arguments": args or {},
                     }
-                    # Check for thought signature in the tool call object
-                    # It might be stored as 'thought_signature' or inside 'function' dict depending on how we store it
-                    if "thought_signature" in tc:
-                        part["thought_signature"] = tc["thought_signature"]
-                    parts.append(part)
+                    if tc.get("id"):
+                        call_step["id"] = tc["id"]
+                    steps.append(call_step)
 
+            # Tool results become ``function_result`` steps.
             if role == "tool":
-                # Map tool role to user role with function_response
-                # We need the tool name. If not present, we might have a problem.
-                # Defog's LLMResponse tool_outputs have 'name'.
-                # Assuming the message has 'name' field (standard in some formats) or we can infer it.
-                # If 'name' is missing, we can't create a valid functionResponse.
                 tool_name = msg.get("name")
-                if tool_name:
-                    # Parse content as result
-                    try:
-                        result_content = (
-                            json.loads(content) if isinstance(content, str) else content
-                        )
-                    except:
-                        result_content = content
-
-                    parts.append(
-                        {
-                            "function_response": {
-                                "name": tool_name,
-                                "response": {"result": result_content},
-                            }
-                        }
+                call_id = msg.get("tool_call_id") or msg.get("call_id")
+                try:
+                    result_content = (
+                        json.loads(content) if isinstance(content, str) else content
                     )
-                else:
-                    # Fallback or error?
-                    # If we don't have name, we can't send functionResponse.
-                    # Maybe just send text?
-                    parts.append({"text": str(content)})
+                except (json.JSONDecodeError, TypeError):
+                    result_content = content
+                result_step: Dict[str, Any] = {
+                    "type": "function_result",
+                    "result": {"result": result_content},
+                }
+                if call_id:
+                    result_step["call_id"] = call_id
+                if tool_name:
+                    result_step["name"] = tool_name
+                steps.append(result_step)
+                continue
 
-                # Force role to user for function_response
-                role = "user"
-
-            elif isinstance(content, str):
-                parts.append({"type": "text", "text": content})
+            # Text / image content becomes a ``user_input`` or ``model_output``
+            # step. The Interactions API keys turns by step type, not a ``role``
+            # field — a role-shaped dict is accepted but its content is ignored.
+            parts = []
+            if isinstance(content, str):
+                if content:
+                    parts.append({"type": "text", "text": content})
             elif isinstance(content, list):
                 for block in content:
                     if isinstance(block, str):
@@ -193,7 +189,6 @@ class GeminiProvider(BaseLLMProvider):
                                 {"type": "text", "text": block.get("text", "")}
                             )
                         elif btype == "image_bytes":
-                            # Handle our internal image format
                             parts.append(
                                 {
                                     "type": "image",
@@ -201,19 +196,14 @@ class GeminiProvider(BaseLLMProvider):
                                     "mime_type": block["mime_type"],
                                 }
                             )
-                        elif btype == "image_url":
-                            # Handle image_url if present
-                            pass
-                        # Add other types if needed
-
-            # Map 'assistant' to 'model' for Gemini
-            gemini_role = "model" if role == "assistant" else "user"
+                        # image_url and other block types are skipped as before.
 
             if parts:
-                input_contents.append({"role": gemini_role, "content": parts})
+                step_type = "model_output" if role == "assistant" else "user_input"
+                steps.append({"type": step_type, "content": parts})
 
         system_instruction = "\n\n".join(system_parts) if system_parts else None
-        return system_instruction, input_contents
+        return system_instruction, steps
 
     def build_params(
         self,
@@ -331,9 +321,9 @@ class GeminiProvider(BaseLLMProvider):
     ) -> List[Dict[str, Any]]:
         """Extract thinking/reasoning text from Gemini thought blocks and call post_tool_function."""
         reasoning_summaries = []
-        if not response.outputs:
+        if not response.steps:
             return []
-        for part in response.outputs:
+        for part in response.steps:
             if getattr(part, "type", None) == "thought" and part.summary:
                 for summary_block in part.summary:
                     if (
@@ -413,7 +403,12 @@ class GeminiProvider(BaseLLMProvider):
             total_input_tokens += input_tokens or 0
             total_output_tokens += output_tokens or 0
             total_cached_tokens += getattr(usage, "total_cached_tokens", 0) or 0
-            total_reasoning_tokens += getattr(usage, "total_reasoning_tokens", 0) or 0
+            # SDK >= 2.0 renamed reasoning usage to ``total_thought_tokens``.
+            total_reasoning_tokens += (
+                getattr(usage, "total_thought_tokens", None)
+                or getattr(usage, "total_reasoning_tokens", 0)
+                or 0
+            )
             # also add reasoning tokens to output tokens for cost calculation
             total_output_tokens += total_reasoning_tokens
 
@@ -424,8 +419,8 @@ class GeminiProvider(BaseLLMProvider):
         while True:
             # Check for function calls
             function_calls = []
-            if response.outputs:
-                for part in response.outputs:
+            if response.steps:
+                for part in response.steps:
                     # Check if part is a function call
                     # It could be an object or dict depending on how the client returns it
                     # Assuming object based on previous errors
@@ -589,7 +584,9 @@ class GeminiProvider(BaseLLMProvider):
                             getattr(usage, "total_cached_tokens", 0) or 0
                         )
                         total_reasoning_tokens += (
-                            getattr(usage, "total_reasoning_tokens", 0) or 0
+                            getattr(usage, "total_thought_tokens", None)
+                            or getattr(usage, "total_reasoning_tokens", 0)
+                            or 0
                         )
                         total_output_tokens += total_reasoning_tokens
 
@@ -607,13 +604,18 @@ class GeminiProvider(BaseLLMProvider):
                 post_tool_function, message=tool_phase_complete_message
             )
 
-        # Extract final content
-        content_parts = []
-        if response.outputs:
-            for part in response.outputs:
-                if getattr(part, "type", None) == "text":
-                    content_parts.append(part.text or "")
-        content = "".join(content_parts)
+        # Extract final content. The Interactions API concatenates the model's
+        # text into ``output_text``; fall back to reading text blocks off the
+        # ``model_output`` steps if that convenience field is unavailable.
+        content = getattr(response, "output_text", None) or ""
+        if not content and response.steps:
+            content_parts = []
+            for step in response.steps:
+                if getattr(step, "type", None) == "model_output":
+                    for block in step.content or []:
+                        if getattr(block, "type", None) == "text":
+                            content_parts.append(block.text or "")
+            content = "".join(content_parts)
 
         if return_tool_outputs_only and tool_outputs:
             content = ""
