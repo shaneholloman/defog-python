@@ -2,7 +2,6 @@ import inspect
 import json
 import traceback
 import time
-import base64
 import logging
 import uuid
 from typing import Dict, List, Any, Optional, Callable, Tuple, Union
@@ -10,11 +9,10 @@ from typing import Dict, List, Any, Optional, Callable, Tuple, Union
 from defog import config as defog_config
 
 from google import genai
-from google.genai import types
 from pydantic import BaseModel
 
 from .base import BaseLLMProvider, LLMResponse
-from ..exceptions import ProviderError, MaxTokensError, ToolError
+from ..exceptions import ProviderError, ToolError
 from ..config import LLMConfig
 from ..cost import CostCalculator
 from ..utils_function_calling import get_function_specs, convert_tool_choice
@@ -193,10 +191,38 @@ class GeminiProvider(BaseLLMProvider):
                                 {
                                     "type": "image",
                                     "data": block["data"],
-                                    "mime_type": block["mime_type"],
+                                    "mime_type": block.get("mime_type"),
                                 }
                             )
-                        # image_url and other block types are skipped as before.
+                        elif btype == "image_url":
+                            url = (block.get("image_url") or {}).get("url", "")
+                            if url.startswith("data:"):
+                                header, _, data = url.partition(",")
+                                mime = (
+                                    header[len("data:") :].split(";")[0] or "image/jpeg"
+                                )
+                                parts.append(
+                                    {"type": "image", "data": data, "mime_type": mime}
+                                )
+                            elif url:
+                                parts.append({"type": "image", "uri": url})
+                        elif btype == "image":
+                            # Anthropic-style image block.
+                            source = block.get("source") or {}
+                            if source.get("type") == "base64":
+                                parts.append(
+                                    {
+                                        "type": "image",
+                                        "data": source.get("data", ""),
+                                        "mime_type": source.get(
+                                            "media_type", "image/jpeg"
+                                        ),
+                                    }
+                                )
+                            elif source.get("type") == "url":
+                                parts.append(
+                                    {"type": "image", "uri": source.get("url", "")}
+                                )
 
             if parts:
                 step_type = "model_output" if role == "assistant" else "user_input"
@@ -267,11 +293,10 @@ class GeminiProvider(BaseLLMProvider):
                 schema = response_format.model_json_schema()
             else:
                 schema = response_format
-            request_params["response_format"] = {
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": schema,
-            }
+            # The Interactions API expects the JSON schema itself as
+            # response_format (a {"type": "text", ...} wrapper is accepted
+            # but the schema inside it is not enforced).
+            request_params["response_format"] = schema
 
         if previous_response_id:
             request_params["previous_interaction_id"] = previous_response_id
@@ -299,7 +324,7 @@ class GeminiProvider(BaseLLMProvider):
 
             if reasoning_effort not in ["minimal", "low", "medium", "high"]:
                 raise ValueError(
-                    f"reasoning_effort must be one of 'minimal', 'low', 'medium', or 'high'"
+                    "reasoning_effort must be one of 'minimal', 'low', 'medium', or 'high'"
                 )
 
             if reasoning_effort not in ["low", "high"] and model.startswith(

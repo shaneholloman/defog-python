@@ -278,6 +278,8 @@ def convert_to_gemini_parts(content: Any, genai_types) -> List[Any]:
                         )
                     )
                 )
+        elif block.get("type") == "text":
+            parts.append(genai_types.Part.from_text(text=block.get("text", "")))
         else:
             parts.append(block)
     return parts

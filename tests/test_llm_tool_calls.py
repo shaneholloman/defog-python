@@ -5,7 +5,6 @@ from defog.llm.utils_function_calling import (
     get_function_specs,
     is_pydantic_style_function,
     wrap_regular_function,
-    convert_tool_choice,
 )
 from tests.conftest import skip_if_no_api_key
 
@@ -1176,10 +1175,12 @@ class TestGeminiExtractReasoningText(unittest.IsolatedAsyncioTestCase):
 
         self.provider = GeminiProvider(api_key="fake-key")
 
-    def _make_response(self, outputs):
+    def _make_response(self, steps):
         from types import SimpleNamespace
 
-        return SimpleNamespace(outputs=outputs)
+        # The Interactions API exposes response turns as ``steps`` (was
+        # ``outputs`` under the pre-2.0 schema).
+        return SimpleNamespace(steps=steps)
 
     def _make_thought_block(self, summaries):
         from types import SimpleNamespace
